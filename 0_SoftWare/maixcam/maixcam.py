@@ -87,6 +87,9 @@ innerSplitTruePoints = []
 innerSplitPointsKind = []
 paperDistanceRaw = 0.0
 paperDistanceCalibration = 0.0
+paperPositionX = 0.0
+paperPositionY = 0.0
+paperPositionZ = 0.0
 paperYaw = 0.0
 paperPitch = 0.0
 paperRoll = 0.0
@@ -260,6 +263,7 @@ def initVariable() -> None:
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
     
@@ -288,6 +292,9 @@ def initVariable() -> None:
     innerSplitPointsKind = []
     paperDistanceRaw = 0.0
     paperDistanceCalibration = 0.0
+    paperPositionX = 0.0
+    paperPositionY = 0.0
+    paperPositionZ = 0.0
     paperYaw = 0.0
     paperPitch = 0.0
     paperRoll = 0.0
@@ -308,6 +315,7 @@ def imgProcess() -> None:
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
     
@@ -345,6 +353,7 @@ def contourFilter(contours: List[np.ndarray]) -> None:
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -386,6 +395,7 @@ def contourNMS(contours: List[np.ndarray]) -> None:
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -415,6 +425,7 @@ def Contours2Quads(contours: List[np.ndarray], center: List[Tuple[int, int]]) ->
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -466,6 +477,7 @@ def calu4DistanceAndEularAngle(camera_matrix: np.ndarray, dist_coeffs: np.ndarra
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -476,7 +488,11 @@ def calu4DistanceAndEularAngle(camera_matrix: np.ndarray, dist_coeffs: np.ndarra
         _, rvec, tvec = cv2.solvePnP(objectPoints, image_points, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_IPPE)
         
         if rvec is not None and tvec is not None:
-            paperDistanceRaw = tvec[2][0]
+            # tvec: board center position in camera coordinate, unit follows objectPoints (mm)
+            paperPositionX = float(tvec[0][0])
+            paperPositionY = float(tvec[1][0])
+            paperPositionZ = float(tvec[2][0])
+            paperDistanceRaw = paperPositionZ
             # 距离归一化
             paper_distance_normalization = (paperDistanceRaw - 1000.0 - paperDistanceOffset[0]) / \
                                          (1000.0 + paperDistanceOffset[10] - paperDistanceOffset[0])
@@ -513,6 +529,7 @@ def euler2RVEC():
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
     # 转换为弧度
@@ -586,6 +603,7 @@ def PerspectiveTrans(img, pts1, pts2):
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -629,6 +647,7 @@ def innerShapeGet(contours: List[np.ndarray], is_overlap: bool):
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -801,6 +820,7 @@ def overlapRectExtract(inner_point: List[Tuple[float, float]], inner_point_kind:
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
     
@@ -950,6 +970,7 @@ def from2_point_draw_rotated_square(image, pt1, pt2, colorRect, colorText):
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -1004,6 +1025,7 @@ def AI(contours: List[np.ndarray]) -> None:
     global allContours, allRect, allCenter, allHierarchy, filterContours, filterRect, filterCenter
     global filterContoursNMS, filterRectNMS, filterCenterNMS, quadsPoints, quadsOrderPoints, quadsEdgeLength
     global quadsEdgePerimeter, innerContours, innerHierarchy, innerPoints, innerPointsKind, innerSplitPoints, innerSplitTruePoints, innerSplitPointsKind, paperDistanceRaw, paperDistanceCalibration
+    global paperPositionX, paperPositionY, paperPositionZ
     global paperYaw, paperPitch, paperRoll, isOverlap, rvec, tvec, innerShape, innerShapeEdgeLength
     global innerSplitContours, innerSplitHierarchy, neededNum, aiDetectionNum, aiDetectionROI, aiDetectionNum2Idx
 
@@ -1313,6 +1335,8 @@ def main():
                 print(f"FRAME MUN: {frame_num}    FPS: {fps:.2f}")
                 print(f"DISTANCE RAW: {paperDistanceRaw:.2f}")
                 print(f"DISTANCE CALIBRATION: {paperDistanceCalibration:.2f}")
+                print(f"BOARD POSITION XYZ(mm): X={paperPositionX:.2f}, Y={paperPositionY:.2f}, Z={paperPositionZ:.2f}")
+                print(f"BOARD EULER(deg): pitch={paperPitch:.2f}, yaw={paperYaw:.2f}, roll={paperRoll:.2f}")
                 print(f"OVERLAP STATUS: {'TRUE' if isOverlap else 'false'}")
                 print(f"NUM2IDX: {aiDetectionNum2Idx}")
                 if len(quadsEdgeLength) == 4:

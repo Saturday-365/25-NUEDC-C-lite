@@ -26,6 +26,9 @@ void initVariable(void){
     innerPoints.clear();    // 内部图形轮廓点
     paperDistanceRaw = 0;
     paperDistanceCalibration = 0;
+    paperPositionX = 0;
+    paperPositionY = 0;
+    paperPositionZ = 0;
     paperYaw = 0;
     paperPitch = 0;
     paperRoll = 0;
@@ -203,8 +206,12 @@ void calu4DistanceAndEularAngle(Mat cameraMatrix, Mat distCoeffs){
         solvePnP(objectPoints, quadsOrderPoints, cameraMatrix, distCoeffs, rvec, tvec, false, SOLVEPNP_IPPE);     // 这个。搞死我了，7.30整整一下午啊 
 
         if(!rvec.empty() && !tvec.empty()){
+            // tvec表示A4目标板中心在相机坐标系下的坐标，单位与objectPoints一致（mm）
+            paperPositionX = tvec.at<double>(0);
+            paperPositionY = tvec.at<double>(1);
+            paperPositionZ = tvec.at<double>(2);
             // 计算距离（平移向量的Z分量）
-            paperDistanceRaw = tvec.at<double>(2);
+            paperDistanceRaw = paperPositionZ;
             // 距离归一化
             double paperDistanceNormalization = (paperDistanceRaw-1000.0f-paperDistanceOffset[0])/(1000.0f+paperDistanceOffset[10]-paperDistanceOffset[0]);
             // 限幅

@@ -42,6 +42,9 @@ vector<vector<Point2f>> innerSplitTruePoints;       // 内部分割图形矩形�
 vector<vector<bool>> innerSplitPointsKind;          // 内部分割图形角点类型（正常边框角点：true；两矩形相交角点：false）
 double paperDistanceRaw;
 double paperDistanceCalibration;
+double paperPositionX;
+double paperPositionY;
+double paperPositionZ;
 double paperYaw;
 double paperPitch;
 double paperRoll;
@@ -177,7 +180,13 @@ debugPoint(11);
         cout << "**************************************************************" << endl;
         cout << "FRAME MUN: " << frameNum << "    FPS: " << FPS << endl;            // 帧数 帧率
         cout << "DISTANCE RAW: " << paperDistanceRaw << endl;                       // 原始距离
-        cout << "DISTANCE CALIBRATION: " << paperDistanceCalibration << endl;       // 校准距离
+        cout << "DISTANCE CALIBRATION: " << paperDistanceCalibration << endl;
+        cout << "BOARD POSITION XYZ(mm): X=" << paperPositionX
+             << " Y=" << paperPositionY
+             << " Z=" << paperPositionZ << endl;                                    // Board position in camera coordinate
+        cout << "BOARD EULER(deg): pitch=" << paperPitch
+             << " yaw=" << paperYaw
+             << " roll=" << paperRoll << endl;                                      // Board attitude relative to camera
         if(isOverlap == true)
             cout << "OVERLAP STATUS: TRUE" << endl;                                 // 重叠情况
         else 

@@ -63,6 +63,9 @@ extern std::vector<std::vector<cv::Point2f>> innerSplitTruePoints;      // 内�
 extern std::vector<std::vector<bool>> innerSplitPointsKind;             // 内部分割图形角点类型（正常边框角点：true；两矩形相交角点：false）
 extern double paperDistanceRaw;
 extern double paperDistanceCalibration;
+extern double paperPositionX;
+extern double paperPositionY;
+extern double paperPositionZ;
 extern double paperYaw;
 extern double paperPitch;
 extern double paperRoll;
