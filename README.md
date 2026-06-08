@@ -1,32 +1,73 @@
-# 25年电赛C题
+# 25-NUEDC-C-lite
 
-## 方案
-由于赛题给定了目标物的特征，<b>A4版面和四周2cm黑色边框</b>，因此可以获得目标物的真实物理尺寸，通过CV进而可以获得目标物的<b>距离与欧拉角</b>，以此完成该题目的核心要求
-### 目标板识别
-<b>1.</b> 使用OpenCV将图像进行预处理，加入<b>图形学闭运算</b>（先膨胀后腐蚀去除图像中的5mm轴线影响），对闭运算后的灰度图像进行<b>Canny算子边缘提取</b>
+2025 年全国大学生电子设计竞赛 **C 题**——基于单目视觉的目标物测量装置。
 
-<b>2.</b> 使用OpenCV对边缘图像进行轮廓提取，对轮廓先后进行<b>面积筛选</b>（筛选出轮廓面积在SQUARE_MIN-SQUARE_MAX之间的轮廓）、<b>轮廓中心坐标筛选</b>（筛选出轮廓中心在以图像中心为圆心、CIRCLE_ROI_RADIUS为半径的圆ROI内的轮廓）、<b>轮廓面积非极大值抑制</b>
+本仓库包含完整竞赛代码（Jetson / MaixCam）以及论文《基于透视校正的平面目标图形识别与尺寸测量方法研究》的 PC 端实验代码和排版工具。
 
-<b>3.</b> 对通过上述步骤进行筛选出来的轮廓进行<b>多边形逼近</b>，提取出矩形外框的四个角点,如下图：
-![边框](ignore/res/4quads.png)
+---
 
-### 目标物中心距离与欧拉角解算以及图像矫正
-<b>1.</b> 使用OpenCV提供的solvePNP算法，对目标物进行距离与欧拉角的解算
+## 项目结构
 
-<b>2.</b> 使用PNP算法得到的平移向量和自己构造的<b>无旋转向量</b>，使用projectPoints函数将目标物3D点坐标映射到2D图像上，<b>得到目标物四个角点目标点位置</b>
+```
+├── 0_SoftWare/
+│   ├── jetson/          ← Jetson Orin NX (C++/OpenCV/OnnxRuntime)
+│   └── maixcam/         ← MaixCam K210 (Python/maix)
+├── 1_PC_running_code/   ← PC 端实验代码 + 标定工具 ★ (当前工作目录)
+├── 2_HardWare/          ← 硬件资料
+├── 3_Document/          ← 论文文档
+└── ignore/              ← 资源图片与排版脚本
+```
 
-<b>3.</b> 使用getPerspectiveTransform函数，传入当前边框四个点的像素坐标和上一步得到的目标坐标，计算出<b>透视变换矩阵</b>，使用warpPerspective函数得到<b>透视变换后的矫正图像</b>
+---
 
-<b>4. </b> 重复<b>目标板识别</b>步骤，将使用的图像更换为刚刚得到的矫正图像
+## 快速开始（PC 实验）
 
-### 内部基础图形识别及边长计算
-<b>1.</b> 以上一步使用的轮廓为ROI，创建掩膜Mask，提取内部图形图像，为了防止调试时瞎眼，对内部图像进行反转操作，如下图：
+### 1. 环境配置
 
-| 原图像 | 内部图像 |
-| :-: | :-: |
-| ![原图像](ignore/res/raw0.png) | ![内部图像](ignore/res/innerAll.png) |
+```powershell
+cd C:\Git_Program\25-NUEDC-C-lite\1_PC_running_code
+# Python 3.12 安装路径
+& "C:\Users\29787\AppData\Local\Programs\Python\Python312\python.exe" -m pip install opencv-python numpy Pillow
+```
 
-<b>1.</b> 对内部图像进行轮廓提取，同时筛选出内部轮廓面积大于阈值INNER_SHAPE_SQUARE_MIN的轮廓，分别对这些轮廓进行<b>多边形近似、计算轮廓面积、找最小外接矩形和找最小外接圆</b>，有以下几种情况：
+### 2. 生成测试图片
+
+```powershell
+& "C:\Users\29787\AppData\Local\Programs\Python\Python312\python.exe" tools\generate_test_images.py --output data/input
+```
+
+### 3. 运行实验
+
+```powershell
+& "C:\Users\29787\AppData\Local\Programs\Python\Python312\python.exe" src\pc_opencv_experiment.py --input data/input --output data/output --camera-matrix 1500 1500 960 720
+```
+
+### 4. iPhone 相机标定（首次使用需做）
+
+详见 `1_PC_running_code/data/calib/README.md`
+
+---
+
+## 关键技术参数
+
+| 参数 | 值 |
+|---|---|
+| A4 外框尺寸 (PC) | 168.1 × 255.1 mm |
+| A4 外框尺寸 (Jetson) | 170.5 × 260.5 mm |
+| 透视校正像素宽度 | 800 px |
+| PnP 方法 | `SOLVEPNP_IPPE` |
+| 距离测量范围 | 100–200 cm |
+
+## 核心算法流程
+
+```
+摄像头采集 → 外框检测(OTSU二值化→找最大四边形→角点排序)
+          → PnP位姿解算(solvePnP → X/Y/Z坐标 + 欧拉角)
+          → 距离修正(分段线性插值)
+          → 透视校正(getPerspectiveTransform)
+          → 内部图形检测(三角形/正方形/圆形分类)
+          → 输出D(距离)和x(图形尺寸)
+```
 
 | 情况 | 图形形状 | 重叠情况 |
 | :-: | :-: | :-: |

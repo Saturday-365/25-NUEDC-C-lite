@@ -1,0 +1,8 @@
+source,shape,pixel_size,measured_size_mm,area_mm2,contour_area_px,center_x,center_y
+100cm_circle.jpg,circle,477.730,100.385,7914.525,177839.000,399,606
+125cm_square.jpg,square,479.000,100.652,10130.725,228763.000,399,606
+150cm_circle.jpg,circle,478.901,100.631,7953.365,178045.500,399,606
+175cm_circle.jpg,circle,478.483,100.543,7939.494,177853.500,399,606
+200cm_triangle.jpg,triangle,602.377,126.577,6937.563,142388.000,399,604
+angle_15deg_circle.jpg,circle,478.719,100.592,7947.307,178013.000,399,605
+angle_30deg_circle.jpg,circle,478.100,100.462,7926.775,177960.000,399,606

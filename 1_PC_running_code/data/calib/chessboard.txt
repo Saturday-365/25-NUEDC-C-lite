@@ -1,0 +1,9 @@
+Chessboard calibration pattern
+Grid size: 8 cols ¡Á 6 rows
+Square size: 25.0 mm
+Inner corners: 9 (cols) ¡Á 7 (rows)
+Physical board size: 200 ¡Á 150 mm
+
+For OpenCV calibration:
+  pattern_size = (9, 7)
+  square_size = 25.0  # mm
