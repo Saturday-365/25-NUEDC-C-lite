@@ -40,6 +40,12 @@ import numpy as np
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
+def imread_unicode(path: Path) -> np.ndarray | None:
+    """支持中文路径的图片读取（Windows 编码兼容）。"""
+    buf = np.fromfile(str(path), dtype=np.uint8)
+    return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
+
 def iter_images(path: Path) -> Iterable[Path]:
     if path.is_file():
         yield path
@@ -75,7 +81,7 @@ def main() -> int:
     square_size = args.square_mm
 
     # ── 准备三维点：棋盘格平面上的角点坐标 ──
-    objp = np.zeros((args.rows * args.cols, 3), dtype=np.float64)
+    objp = np.zeros((args.rows * args.cols, 3), dtype=np.float32)
     objp[:, :2] = np.mgrid[0:args.cols, 0:args.rows].T.reshape(-1, 2) * square_size
 
     object_points: list[np.ndarray] = []  # 世界坐标系中的点
@@ -93,7 +99,7 @@ def main() -> int:
 
     successful = 0
     for path in image_paths[: args.max_images]:
-        img = cv2.imread(str(path))
+        img = imread_unicode(path)
         if img is None:
             print(f"  ⚠  Cannot read: {path.name}, skipping")
             continue
@@ -203,7 +209,7 @@ def main() -> int:
     # ── 畸变校正示例 ──
     sample_image = next((p for p in image_paths if p.suffix.lower() in IMAGE_EXTS), None)
     if sample_image:
-        sample = cv2.imread(str(sample_image))
+        sample = imread_unicode(sample_image)
         if sample is not None:
             h, w = sample.shape[:2]
             new_camera, roi = cv2.getOptimalNewCameraMatrix(
@@ -214,7 +220,7 @@ def main() -> int:
             x, y, roi_w, roi_h = roi
             dst = dst[y:y + roi_h, x:x + roi_w]
 
-            undist_path = args.output.with_stem(args.output.stem + "_undistort_demo")
+            undist_path = args.output.parent / (args.output.stem + "_undistort_demo.jpg")
             cv2.imwrite(str(undist_path), dst)
             print(f"\nUndistortion demo: {undist_path.resolve()}")
 

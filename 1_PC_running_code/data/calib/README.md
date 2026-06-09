@@ -49,11 +49,12 @@
 ```powershell
 Set-Location "C:\Git_Program\25-NUEDC-C-lite\1_PC_running_code"
 
-# 标准标定（棋盘格 9×7 内角点，25mm）
+# 标定（棋盘格 7×5 内角点，25mm）
+# ⚠ 棋盘格内角点数请根据你实际打印的棋盘格调整！
 & "C:\Users\29787\AppData\Local\Programs\Python\Python312\python.exe" tools\calibrate_camera.py `
     --input data/calib/iphone_images/ `
     --output data/calib/iphone_calib.npz `
-    --show
+    --cols 7 --rows 5
 ```
 
 加入 `--show` 参数可以逐张查看角点检测结果。
@@ -61,14 +62,16 @@ Set-Location "C:\Git_Program\25-NUEDC-C-lite\1_PC_running_code"
 正常输出示例：
 ```
 Calibration result:
-  RMS re-projection error: 0.3542 pixels
+  RMS re-projection error: 1.6859 pixels
+  Mean corner error: 0.2611 pixels
   Camera matrix:
-    [[2925.34, 0, 2013.56],
-     [0, 2928.12, 1510.78],
-     [0, 0, 1]]
+    [[1133.09, 0,      506.30],
+     [0,      1133.09, 648.14],
+     [0,      0,       1      ]]
 ```
 
 **RMS 重投影误差 < 0.5 像素** 说明标定质量良好。
+注意：通过微信传输的图片会被压缩，标定精度会受影响。理想情况是直接用数据线传输原始照片。
 
 ---
 

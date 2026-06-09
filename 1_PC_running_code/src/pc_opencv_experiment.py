@@ -13,6 +13,24 @@ import numpy as np
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
+
+def imread_unicode(path: Path) -> np.ndarray | None:
+    """支持中文路径的图片读取（Windows 编码兼容）。"""
+    buf = np.fromfile(str(path), dtype=np.uint8)
+    return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
+
+def imwrite_unicode(path: Path, img: np.ndarray, params: list[int] | None = None) -> bool:
+    """支持中文路径的图片写入。"""
+    ext = path.suffix.lower()
+    success, buf = cv2.imencode(ext, img, params or [])
+    if not success:
+        return False
+    with open(str(path), "wb") as f:
+        f.write(buf.tobytes())
+    return True
+
+
 # ── 默认相机参数（无标定时使用近似 pinhole 模型，需用户标定后替换） ──────────
 # iPhone 主摄（实测 26mm 等效焦距）在 4032×3024 下约为 fx=fy≈3000
 # 使用时请通过 --camera-matrix 或 --calib-file 提供标定结果
@@ -375,7 +393,7 @@ def process_image(
     image_path: Path, output_dir: Path, config: ExperimentConfig
 ) -> tuple[list[ShapeMeasurement], PnPResult | None]:
     """处理单张图像：外框检测 → PnP 位姿解算 → 透视校正 → 内部图形测量。"""
-    image = cv2.imread(str(image_path))
+    image = imread_unicode(image_path)
     if image is None:
         raise ValueError(f"Cannot read image: {image_path}")
 
@@ -417,9 +435,9 @@ def process_image(
 
     # ── 5. 保存结果 ──
     stem = image_path.stem
-    cv2.imwrite(str(output_dir / f"{stem}_binary.png"), binary)
-    cv2.imwrite(str(output_dir / f"{stem}_raw.png"), raw_annotated)
-    cv2.imwrite(str(output_dir / f"{stem}_warped.png"), warped_annotated)
+    imwrite_unicode(output_dir / f"{stem}_binary.png", binary)
+    imwrite_unicode(output_dir / f"{stem}_raw.png", raw_annotated)
+    imwrite_unicode(output_dir / f"{stem}_warped.png", warped_annotated)
     return measurements, pose
 
 
@@ -494,7 +512,7 @@ def load_calibration(calib_path: Path) -> tuple[np.ndarray, np.ndarray]:
     """
     ext = calib_path.suffix.lower()
     if ext == ".npz":
-        我data = np.load(str(calib_path))
+        data = np.load(str(calib_path))
         cmat = data["camera_matrix"]
         dcoeff = data["dist_coeffs"]
     elif ext == ".json":
@@ -517,7 +535,7 @@ def capture_from_camera(camera_index: int, capture_path: Path) -> None:
         if not ok:
             raise RuntimeError("Camera opened but did not return a frame")
         capture_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(capture_path), frame)
+        imwrite_unicode(capture_path, frame)
     finally:
         cap.release()
 
@@ -638,7 +656,7 @@ def main() -> int:
                 pil_img = PILImage.open(image_path)
                 pil_img = pil_img.resize(tuple(args.resize), PILImage.LANCZOS)
                 temp_path = output_dir / f"_resized_{image_path.name}"
-                pil_img.save(temp_path)
+                pil_img.save(str(temp_path))
                 image_path = temp_path
 
             measurements, pose = process_image(image_path, output_dir, config)
