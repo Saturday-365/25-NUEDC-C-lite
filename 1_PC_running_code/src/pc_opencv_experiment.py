@@ -47,10 +47,7 @@ DEFAULT_DIST_COEFFS = np.zeros((5, 1), dtype=np.float64)
 class ExperimentConfig:
     board_width_mm: float = 168.1
     board_height_mm: float = 255.1
-    warp_width_px: int = 800
     min_board_area_ratio: float = 0.04
-    inner_margin_ratio: float = 0.08
-    min_inner_area_px: float = 400.0
     # ── 相机参数 ──
     camera_matrix: np.ndarray = field(default_factory=lambda: DEFAULT_CAMERA_MATRIX.copy())
     dist_coeffs: np.ndarray = field(default_factory=lambda: DEFAULT_DIST_COEFFS.copy())
@@ -58,10 +55,6 @@ class ExperimentConfig:
     calib_points: list[tuple[float, float]] = field(default_factory=list)
     # ── PnP 方法 ──
     pnp_method: int = cv2.SOLVEPNP_IPPE
-
-    @property
-    def warp_height_px(self) -> int:
-        return round(self.warp_width_px * self.board_height_mm / self.board_width_mm)
 
     @property
     def board_diagonal_mm(self) -> float:
@@ -78,18 +71,6 @@ class ExperimentConfig:
             [ w2,  h2, 0],
             [-w2,  h2, 0],
         ], dtype=np.float64)
-
-
-@dataclass
-class ShapeMeasurement:
-    source: str
-    shape: str
-    pixel_size: float
-    measured_size_mm: float
-    area_mm2: float
-    contour_area_px: float
-    center_x: int
-    center_y: int
 
 
 @dataclass
@@ -251,155 +232,225 @@ def preprocess_for_black_contours(image: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
 
 
-def find_board_quad(binary: np.ndarray, config: ExperimentConfig) -> np.ndarray | None:
-    contours = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
-    image_area = binary.shape[0] * binary.shape[1]
+def _quads_from_contours(
+    contours, image_area: float, config: ExperimentConfig, eps_factor: float = 0.02
+) -> list[tuple[float, np.ndarray]]:
+    """从轮廓列表中筛选四边形候选。"""
     candidates: list[tuple[float, np.ndarray]] = []
-
     for contour in contours:
         area = cv2.contourArea(contour)
         if area < image_area * config.min_board_area_ratio:
             continue
-
         perimeter = cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+        if perimeter <= 0:
+            continue
+        approx = cv2.approxPolyDP(contour, eps_factor * perimeter, True)
         if len(approx) == 4 and cv2.isContourConvex(approx):
-            candidates.append((area, approx))
+            # 边长不能太离谱：最短边 / 最长边 > 0.15
+            edges = [
+                np.linalg.norm(approx[(i + 1) % 4] - approx[i])
+                for i in range(4)
+            ]
+            if min(edges) / max(edges) > 0.15:
+                candidates.append((area, approx))
+    return candidates
 
-    if not candidates:
-        return None
 
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return order_quad_points(candidates[0][1])
+def _find_quad_in_roi(
+    img: np.ndarray, config: ExperimentConfig,
+    margin: float = 0.0
+) -> np.ndarray | None:
+    """在图像（或裁剪后的 ROI）中找 A4 外框四边形。margin>0 时先裁剪边缘。"""
+    h, w = img.shape[:2]
+    if margin > 0:
+        x0, x1 = int(w * margin), int(w * (1 - margin))
+        y0, y1 = int(h * margin), int(h * (1 - margin))
+        roi = img[y0:y1, x0:x1]
+    else:
+        x0, y0 = 0, 0
+        roi = img
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    roi_area = blur.shape[0] * blur.shape[1]
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+
+    # OTSU 找黑框
+    binary_inv = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    morph = cv2.morphologyEx(binary_inv, cv2.MORPH_CLOSE, kernel, iterations=2)
+    cnts = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+
+    candidates = _quads_from_contours(cnts, roi_area, config)
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        best = candidates[0][1]
+        if margin > 0:
+            best[:, :, 0] += x0
+            best[:, :, 1] += y0
+        return order_quad_points(best)
+    return None
 
 
-def warp_board(
-    image: np.ndarray, board_quad: np.ndarray, config: ExperimentConfig
-) -> tuple[np.ndarray, np.ndarray]:
-    width = config.warp_width_px
-    height = config.warp_height_px
-    target = np.array(
-        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
-        dtype=np.float32,
+def find_board_quad(image: np.ndarray, config: ExperimentConfig) -> np.ndarray | None:
+    """多策略查找 A4 外框四边形。依次尝试不同方法，直到找到。"""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    image_area = blur.shape[0] * blur.shape[1]
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 1: 全图 OTSU（原方法，最快）
+    # ═══════════════════════════════════════════════════════════
+    q = _find_quad_in_roi(image, config, margin=0.0)
+    if q is not None:
+        return q
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 2: 裁剪四周 15-30%，排除杂乱背景
+    # ═══════════════════════════════════════════════════════════
+    for margin in [0.20, 0.15, 0.25, 0.30]:
+        q = _find_quad_in_roi(image, config, margin=margin)
+        if q is not None:
+            return q
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 3: OTSU 白纸检测（深色背景上的白色 A4）
+    # ═══════════════════════════════════════════════════════════
+    binary_white = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+    morph_white = cv2.morphologyEx(binary_white, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours_white = cv2.findContours(morph_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    candidates_white = _quads_from_contours(contours_white, image_area, config)
+    if candidates_white:
+        candidates_white.sort(key=lambda item: item[0], reverse=True)
+        return order_quad_points(candidates_white[0][1])
+    # 白纸区域找 minAreaRect 作为后备
+    if contours_white:
+        largest = max(contours_white, key=cv2.contourArea)
+        la = cv2.contourArea(largest)
+        if la > image_area * config.min_board_area_ratio:
+            rect = cv2.minAreaRect(largest)
+            rw, rh = rect[1]
+            if rw > 0 and rh > 0:
+                asp = max(rw, rh) / min(rw, rh)
+                if 1.2 < asp < 2.0:
+                    box = cv2.boxPoints(rect)
+                    return order_quad_points(box)
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 4: 自适应阈值
+    # ═══════════════════════════════════════════════════════════
+    adaptive = cv2.adaptiveThreshold(
+        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 51, 10
     )
-    matrix = cv2.getPerspectiveTransform(board_quad, target)
-    warped = cv2.warpPerspective(image, matrix, (width, height))
-    return warped, matrix
+    morph2 = cv2.morphologyEx(adaptive, cv2.MORPH_CLOSE, kernel, iterations=2)
+    dilate_k = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    morph2 = cv2.dilate(morph2, dilate_k, iterations=1)
+    contours2 = cv2.findContours(morph2, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    candidates2 = _quads_from_contours(contours2, image_area, config)
+    if candidates2:
+        candidates2.sort(key=lambda item: item[0], reverse=True)
+        return order_quad_points(candidates2[0][1])
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 5: Canny 边缘 + 膨胀
+    # ═══════════════════════════════════════════════════════════
+    edges = cv2.Canny(blur, 30, 100)
+    edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges_dilated = cv2.dilate(edges, edge_kernel, iterations=4)
+    contours3 = cv2.findContours(edges_dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    candidates3 = _quads_from_contours(contours3, image_area, config, eps_factor=0.025)
+    if candidates3:
+        candidates3.sort(key=lambda item: item[0], reverse=True)
+        return order_quad_points(candidates3[0][1])
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 6: RETR_TREE 嵌套四边形
+    # ═══════════════════════════════════════════════════════════
+    binary_inv = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    morph = cv2.morphologyEx(binary_inv, cv2.MORPH_CLOSE, kernel, iterations=2)
+    morph_inv = 255 - morph
+    contours4, hierarchy = cv2.findContours(morph_inv, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is not None:
+        hierarchy = hierarchy[0]
+        for i, contour in enumerate(contours4):
+            area = cv2.contourArea(contour)
+            if area < image_area * config.min_board_area_ratio:
+                continue
+            peri = cv2.arcLength(contour, True)
+            if peri <= 0:
+                continue
+            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+            if len(approx) != 4 or not cv2.isContourConvex(approx):
+                continue
+            child = hierarchy[i][2]
+            if child >= 0:
+                child_area = cv2.contourArea(contours4[child])
+                fill_ratio = child_area / area
+                if 0.55 < fill_ratio < 0.96:
+                    return order_quad_points(approx)
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 7: HSV V 通道多阈值白纸检测
+    # ═══════════════════════════════════════════════════════════
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    v = hsv[:, :, 2]
+    for thresh_val in range(180, 100, -10):
+        _, v_bin = cv2.threshold(v, thresh_val, 255, cv2.THRESH_BINARY)
+        v_morph = cv2.morphologyEx(v_bin, cv2.MORPH_CLOSE, kernel, iterations=2)
+        c_v = cv2.findContours(v_morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+        if c_v:
+            largest_v = max(c_v, key=cv2.contourArea)
+            la = cv2.contourArea(largest_v)
+            if la > image_area * 0.15:
+                p_v = cv2.arcLength(largest_v, True)
+                if p_v > 0:
+                    ap_v = cv2.approxPolyDP(largest_v, 0.02 * p_v, True)
+                    if len(ap_v) == 4 and cv2.isContourConvex(ap_v):
+                        return order_quad_points(ap_v)
+                    rect_v = cv2.minAreaRect(largest_v)
+                    box_v = cv2.boxPoints(rect_v)
+                    rw, rh = rect_v[1]
+                    if rw > 0 and rh > 0:
+                        asp = max(rw, rh) / min(rw, rh)
+                        if 1.2 < asp < 2.0:
+                            return order_quad_points(box_v)
+
+    # ═══════════════════════════════════════════════════════════
+    # 策略 8: 自适应阈值多 block 大小
+    # ═══════════════════════════════════════════════════════════
+    s = hsv[:, :, 1]
+    for src in [blur, 255 - s, v]:
+        for block in [31, 51, 71]:
+            try:
+                ad = cv2.adaptiveThreshold(src, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                          cv2.THRESH_BINARY_INV, block, 10)
+            except Exception:
+                continue
+            ad_morph = cv2.morphologyEx(ad, cv2.MORPH_CLOSE, kernel, iterations=1)
+            c_ad = cv2.findContours(ad_morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+            cand_ad = _quads_from_contours(c_ad, image_area, config)
+            if cand_ad:
+                cand_ad.sort(key=lambda x: x[0], reverse=True)
+                return order_quad_points(cand_ad[0][1])
+
+    return None
 
 
-def classify_inner_shape(contour: np.ndarray) -> tuple[str, float]:
-    area = cv2.contourArea(contour)
-    perimeter = cv2.arcLength(contour, True)
-    if perimeter <= 0:
-        return "unknown", 0.0
 
-    approx = cv2.approxPolyDP(contour, 0.035 * perimeter, True)
-    circularity = 4.0 * np.pi * area / (perimeter * perimeter)
-
-    if len(approx) == 3:
-        return "triangle", perimeter / 3.0
-
-    rect = cv2.minAreaRect(contour)
-    rect_w, rect_h = rect[1]
-    if rect_w <= 0 or rect_h <= 0:
-        return "unknown", 0.0
-
-    aspect = max(rect_w, rect_h) / min(rect_w, rect_h)
-    fill_ratio = area / (rect_w * rect_h)
-
-    if len(approx) == 4 and aspect < 1.25 and fill_ratio > 0.72:
-        return "square", (rect_w + rect_h) / 2.0
-
-    if circularity > 0.72:
-        (_, _), radius = cv2.minEnclosingCircle(contour)
-        return "circle", radius * 2.0
-
-    return "unknown", max(rect_w, rect_h)
-
-
-def shape_area_mm2(shape: str, size_mm: float) -> float:
-    if shape == "triangle":
-        return size_mm * size_mm * np.sqrt(3.0) / 4.0
-    if shape == "square":
-        return size_mm * size_mm
-    if shape == "circle":
-        radius = size_mm / 2.0
-        return np.pi * radius * radius
-    return 0.0
-
-
-def detect_inner_shapes(
-    warped: np.ndarray, source_name: str, config: ExperimentConfig
-) -> tuple[list[ShapeMeasurement], np.ndarray]:
-    annotated = warped.copy()
-    binary = preprocess_for_black_contours(warped)
-
-    margin_x = round(warped.shape[1] * config.inner_margin_ratio)
-    margin_y = round(warped.shape[0] * config.inner_margin_ratio)
-    inner = binary[margin_y : warped.shape[0] - margin_y, margin_x : warped.shape[1] - margin_x]
-
-    contours = cv2.findContours(inner, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
-    px_to_mm = (config.board_width_mm / warped.shape[1] + config.board_height_mm / warped.shape[0]) / 2.0
-
-    measurements: list[ShapeMeasurement] = []
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area < config.min_inner_area_px:
-            continue
-
-        contour = contour + np.array([[[margin_x, margin_y]]], dtype=contour.dtype)
-        shape, pixel_size = classify_inner_shape(contour)
-        if shape == "unknown" or pixel_size <= 0:
-            continue
-
-        measured_size_mm = pixel_size * px_to_mm
-        moments = cv2.moments(contour)
-        if moments["m00"] == 0:
-            continue
-        center_x = int(moments["m10"] / moments["m00"])
-        center_y = int(moments["m01"] / moments["m00"])
-
-        measurements.append(
-            ShapeMeasurement(
-                source=source_name,
-                shape=shape,
-                pixel_size=pixel_size,
-                measured_size_mm=measured_size_mm,
-                area_mm2=shape_area_mm2(shape, measured_size_mm),
-                contour_area_px=area,
-                center_x=center_x,
-                center_y=center_y,
-            )
-        )
-
-        cv2.drawContours(annotated, [contour], -1, (0, 180, 0), 2)
-        cv2.circle(annotated, (center_x, center_y), 4, (0, 0, 255), -1)
-        label = f"{shape} {measured_size_mm:.1f}mm"
-        cv2.putText(
-            annotated,
-            label,
-            (center_x + 8, center_y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 0, 255),
-            2,
-            cv2.LINE_AA,
-        )
-
-    return measurements, annotated
 
 
 def process_image(
     image_path: Path, output_dir: Path, config: ExperimentConfig
-) -> tuple[list[ShapeMeasurement], PnPResult | None]:
-    """处理单张图像：外框检测 → PnP 位姿解算 → 透视校正 → 内部图形测量。"""
+) -> PnPResult | None:
+    """处理单张图像：外框检测 → PnP 位姿解算 → 输出结果。"""
     image = imread_unicode(image_path)
     if image is None:
         raise ValueError(f"Cannot read image: {image_path}")
 
     # ── 1. 外框检测 ──
     binary = preprocess_for_black_contours(image)
-    board_quad = find_board_quad(binary, config)
+    board_quad = find_board_quad(image, config)
     if board_quad is None:
         raise ValueError(f"No rectangular target board found: {image_path}")
 
@@ -408,37 +459,21 @@ def process_image(
     if pose is not None:
         pose.source = image_path.name
 
-    # ── 3. 标注原始图像 ──
+    # ── 3. 标注并保存结果图 ──
     raw_annotated = image.copy()
     cv2.polylines(raw_annotated, [board_quad.astype(np.int32)], True, (0, 0, 255), 3)
     for idx, point in enumerate(board_quad.astype(np.int32), start=1):
         cv2.putText(
-            raw_annotated,
-            str(idx),
-            tuple(point),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            (255, 0, 0),
-            2,
-            cv2.LINE_AA,
+            raw_annotated, str(idx), tuple(point),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2, cv2.LINE_AA,
         )
-    # 绘制位姿信息
     if pose is not None:
         draw_pose_info(raw_annotated, pose, config.camera_matrix, config.dist_coeffs)
 
-    # ── 4. 透视校正 & 内部图形检测 ──
-    warped, _ = warp_board(image, board_quad, config)
-    measurements, warped_annotated = detect_inner_shapes(warped, image_path.name, config)
-    # 在 warped 图像上也叠加位姿信息
-    if pose is not None:
-        draw_pose_info(warped_annotated, pose, config.camera_matrix, config.dist_coeffs)
-
-    # ── 5. 保存结果 ──
     stem = image_path.stem
     imwrite_unicode(output_dir / f"{stem}_binary.png", binary)
-    imwrite_unicode(output_dir / f"{stem}_raw.png", raw_annotated)
-    imwrite_unicode(output_dir / f"{stem}_warped.png", warped_annotated)
-    return measurements, pose
+    imwrite_unicode(output_dir / f"{stem}_annotated.png", raw_annotated)
+    return pose
 
 
 def iter_input_images(input_path: Path) -> Iterable[Path]:
@@ -449,37 +484,6 @@ def iter_input_images(input_path: Path) -> Iterable[Path]:
     for path in sorted(input_path.iterdir()):
         if path.suffix.lower() in IMAGE_EXTENSIONS:
             yield path
-
-
-def write_measurements_csv(output_path: Path, measurements: list[ShapeMeasurement]) -> None:
-    with output_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=[
-                "source",
-                "shape",
-                "pixel_size",
-                "measured_size_mm",
-                "area_mm2",
-                "contour_area_px",
-                "center_x",
-                "center_y",
-            ],
-        )
-        writer.writeheader()
-        for item in measurements:
-            writer.writerow(
-                {
-                    "source": item.source,
-                    "shape": item.shape,
-                    "pixel_size": f"{item.pixel_size:.3f}",
-                    "measured_size_mm": f"{item.measured_size_mm:.3f}",
-                    "area_mm2": f"{item.area_mm2:.3f}",
-                    "contour_area_px": f"{item.contour_area_px:.3f}",
-                    "center_x": item.center_x,
-                    "center_y": item.center_y,
-                }
-            )
 
 
 def write_pose_csv(output_path: Path, poses: list[PnPResult]) -> None:
@@ -645,7 +649,6 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 处理每张图片 ──
-    all_measurements: list[ShapeMeasurement] = []
     all_poses: list[PnPResult] = []
 
     for image_path in iter_input_images(args.input):
@@ -659,28 +662,21 @@ def main() -> int:
                 pil_img.save(str(temp_path))
                 image_path = temp_path
 
-            measurements, pose = process_image(image_path, output_dir, config)
-            all_measurements.extend(measurements)
+            pose = process_image(image_path, output_dir, config)
 
             stem = image_path.stem
             if pose is not None:
                 all_poses.append(pose)
                 print(f"Processed {stem}: "
                       f"D_raw={pose.tvec_z_mm:.0f}mm  D_cal={pose.distance_mm:.0f}mm  "
-                      f"X={pose.tvec_x_mm:+.0f}  Y={pose.tvec_y_mm:+.0f}  "
-                      f"| shapes={len(measurements)}")
+                      f"X={pose.tvec_x_mm:+.0f}  Y={pose.tvec_y_mm:+.0f}")
             else:
-                print(f"Processed {stem}: PnP failed, shapes={len(measurements)}")
+                print(f"Processed {stem}: PnP failed")
 
         except ValueError as exc:
             print(f"Skipped {image_path.name}: {exc}")
 
     # ── 保存 CSV ──
-    if all_measurements:
-        mpath = output_dir / "measurements.csv"
-        write_measurements_csv(mpath, all_measurements)
-        print(f"Wrote {mpath} ({len(all_measurements)} shapes)")
-
     if all_poses:
         ppath = output_dir / "pose_results.csv"
         write_pose_csv(ppath, all_poses)
