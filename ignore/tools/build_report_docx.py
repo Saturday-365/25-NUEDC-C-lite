@@ -28,7 +28,7 @@ DOCS = ROOT / "3_Document"
 MD = DOCS / "基于透视校正的平面目标图形识别与尺寸测量方法研究.md"
 # 使用已排版完成的 docx 作为格式模板
 TEMPLATE = DOCS / "2315102026 宋嘉诚 基于透视校正的平面目标图形识别与尺寸测量方法研究-排版完成.docx"
-OUT = DOCS / "_rendered_paper" / "2315102026 宋嘉诚 基于单目视觉的PnP距离测量方法实验报告.docx"
+OUT = DOCS / "_rendered_paper" / "2315102026 宋嘉诚 基于PnP的单目视觉距离测量方法.docx"
 
 
 # ── 字体工具 ──
